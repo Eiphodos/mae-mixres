@@ -5,7 +5,7 @@
 
 import math
 import torch
-from ..clusten import WEIGHTEDGATHERFunction
+from modeling.clusten import WEIGHTEDGATHERFunction
 
 
 def points2img(pos, pixel, h, w):
