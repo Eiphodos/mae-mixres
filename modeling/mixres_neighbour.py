@@ -7,8 +7,8 @@ import math
 import torch
 import torch.nn as nn
 from einops import rearrange
-from clusten import CLUSTENQKFunction, CLUSTENAVFunction
-from .point_utils import knn_keops, space_filling_cluster
+from modeling.clusten import CLUSTENQKFunction, CLUSTENAVFunction
+from modeling.point_utils import knn_keops, space_filling_cluster
 
 # assumes largest input resolution is 2048 x 2048
 rel_pos_width = 2048 // 4 - 1

@@ -354,7 +354,8 @@ def mae_mixres_small_patch32_dec512d8b(**kwargs):
                            bb_in_feats=bb_in_feats, 
                            decoder_embed_dim=512, 
                            decoder_depth=8, 
-                           decoder_num_heads=16)
+                           decoder_num_heads=16,
+                           **kwargs)
     return model
 
 
