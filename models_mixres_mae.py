@@ -80,6 +80,7 @@ class UpDownBackbone(nn.Module):
 
     def forward_encoder(self, im, mask_ratio=0.75):
         B, C, H, W = im.shape
+        print("Input image shape is {}".format(im.shape))
         up = True
         upsampling_mask = None
         features = None
@@ -101,6 +102,7 @@ class UpDownBackbone(nn.Module):
                 feat_pos = output[f + '_pos']
                 feat_scale = output[f + '_scale']
                 feat_ss = output[f + '_spatial_shape']
+                print("For layer {} with spatial shape {}, feat_pos shape: {}, max: {}".format(j, feat_ss, feat_pos.shape, feat_pos.max()))
                 B, N, C = feat.shape
                 if f + '_pos' in outs:
                     pos_indices = self.find_pos_org_order(outs[f + '_pos'], feat_pos)
