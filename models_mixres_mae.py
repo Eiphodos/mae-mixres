@@ -58,7 +58,7 @@ class UpDownBackbone(nn.Module):
         self.decoder_norm = nn.LayerNorm(decoder_embed_dim)
         self.decoder_pred = nn.Linear(decoder_embed_dim, patch_size**2 * 3, bias=True) # decoder to patch
         decoder_pos_embed = get_2d_sincos_pos_embed(self.decoder_pos_embed.shape[-1],
-                                                    int(num_patches ** .5), cls_token=True)
+                                                    int(num_patches ** .5), cls_token=False)
         self.decoder_pos_embed.data.copy_(torch.from_numpy(decoder_pos_embed).float().unsqueeze(0))
         torch.nn.init.normal_(self.mask_token, std=.02)
         # --------------------------------------------------------------------------
