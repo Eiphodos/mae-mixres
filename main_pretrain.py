@@ -153,6 +153,11 @@ def main(args):
     else:
         log_writer = None
 
+    import pykeops
+    import tempfile
+    with tempfile.TemporaryDirectory() as dirname:
+        pykeops.set_build_folder(args.log_dir)
+
     data_loader_train = torch.utils.data.DataLoader(
         dataset_train, sampler=sampler_train,
         batch_size=args.batch_size,
