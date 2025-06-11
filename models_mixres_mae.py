@@ -80,7 +80,7 @@ class UpDownBackbone(nn.Module):
 
     def forward_encoder(self, im, mask_ratio=0.75):
         B, C, H, W = im.shape
-        print("Input image shape is {}".format(im.shape))
+        #print("Input image shape is {}".format(im.shape))
         up = True
         upsampling_mask = None
         features = None
@@ -102,7 +102,7 @@ class UpDownBackbone(nn.Module):
                 feat_pos = output[f + '_pos']
                 feat_scale = output[f + '_scale']
                 feat_ss = output[f + '_spatial_shape']
-                print("For layer {} with spatial shape {}, feat_pos shape: {}, max: {}".format(j, feat_ss, feat_pos.shape, feat_pos.max()))
+                #print("For layer {} with spatial shape {}, feat_pos shape: {}, max: {}".format(j, feat_ss, feat_pos.shape, feat_pos.max()))
                 B, N, C = feat.shape
                 if f + '_pos' in outs:
                     pos_indices = self.find_pos_org_order(outs[f + '_pos'], feat_pos)
@@ -286,7 +286,7 @@ def mae_mixres_small_patch32_dec512d8b(**kwargs):
     c_drop_path_rate = 0.1
     c_layer_scale = 0.0
     c_register_tokens = 0
-    min_patch_size = c_patch_sizes[-1]
+    min_patch_size = c_patch_sizes[n_layers // 2]
     for layer_index, name in enumerate(bb_names):
         if layer_index == 0:
             first_layer = True
