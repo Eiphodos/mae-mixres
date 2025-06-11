@@ -129,7 +129,7 @@ class UpDownBackbone(nn.Module):
                 up = False
             if up:
                 B, N, C = all_feat[0].shape
-                upsampling_mask = self.generate_random_upsampling_mask(B, N)
+                upsampling_mask = self.generate_random_upsampling_mask(B, N, feat.device)
                 #upsampling_mask = self.upsamplers[scale](all_feat[0]).squeeze(-1)
 
             #print("Upsampling mask for scale {}: pred: {}, oracle: {}".format(scale, upsampling_mask_pred.shape, upsampling_mask_oracle.shape))
@@ -193,8 +193,8 @@ class UpDownBackbone(nn.Module):
         return loss, pred, mask
 
 
-    def generate_random_upsampling_mask(self, batch_size, n_tokens):
-        upsampling_mask = torch.randn(batch_size, n_tokens).float().to('cuda')
+    def generate_random_upsampling_mask(self, batch_size, n_tokens, device):
+        upsampling_mask = torch.randn(batch_size, n_tokens).float().to(device)
         return upsampling_mask
     def find_pos_org_order(self, pos_org, pos_shuffled):
         dists = torch.cdist(pos_org.float(), pos_shuffled.float(), p=1)  # Manhattan distance
