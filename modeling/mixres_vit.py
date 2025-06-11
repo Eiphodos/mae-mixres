@@ -392,7 +392,7 @@ class MixResViT(nn.Module):
             x = self.patch_embed(im)
             if torch.isnan(x).any():
                 print("NaNs detected in patch-embedded features in ViT in scale {}".format(scale))
-            pos = get_2dpos_of_curr_ps_in_min_ps(H, W, PS, self.min_patch_size, scale).to('cuda')
+            pos = get_2dpos_of_curr_ps_in_min_ps(H, W, PS, self.min_patch_size, scale).to(im.device)
             pos = pos.repeat(B, 1, 1)
             #print("Encoder pos max x: {}, max y: {}, and all pos: {}".format(pos[:, :, 0].max(), pos[:, :, 1].max(), pos))
             #self.test_pos_cover_and_overlap(pos[0], H, W, scale)

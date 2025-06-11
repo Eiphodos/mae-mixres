@@ -907,7 +907,7 @@ class MixResNeighbour(nn.Module):
 
         if self.first_layer:
             x = self.patch_embed(im)
-            pos = get_2dpos_of_curr_ps_in_min_ps(H, W, PS, self.min_patch_size, scale).to('cuda')
+            pos = get_2dpos_of_curr_ps_in_min_ps(H, W, PS, self.min_patch_size, scale).to(im.device)
             pos = pos.repeat(B, 1, 1)
             x = x + self.pos_embed(pos[:, :, 1:])
         else:
