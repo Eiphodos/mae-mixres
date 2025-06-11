@@ -9,6 +9,10 @@ import torch
 from torch import nn
 import torch.nn.functional as F
 from timm.models.layers import trunc_normal_
+from timm.models.vision_transformer import Block
+from util.pos_embed import get_2d_sincos_pos_embed
+from modeling.mixres_vit import MixResViT
+from modeling.mixres_neighbour import MixResNeighbour
 
 class MLP(nn.Module):
     """ Very simple multi-layer perceptron (also called FFN)"""
@@ -26,14 +30,13 @@ class MLP(nn.Module):
 
 
 class UpDownBackbone(nn.Module):
-    def __init__(self, backbones, backbone_dims, out_dim, all_out_features, n_scales, num_classes, bb_in_feats):
+    def __init__(self, backbones, backbone_dims, all_out_features, n_scales, bb_in_feats, img_size=224, decoder_embed_dim=512, decoder_depth=8, decoder_num_heads=16, norm_pix_loss=False):
         super().__init__()
         self.backbones = nn.ModuleList(backbones)
         final_upsampling_ratios = []
         for b in self.backbones:
             final_upsampling_ratios.append(b.upscale_ratio)
         self.final_upsampling_ratios = final_upsampling_ratios
-        self.out_dim = out_dim
         self.backbone_dims = backbone_dims
         self.all_out_features = all_out_features
         self.all_out_features_scales = {k: len(all_out_features) - i - 1 for i, k in enumerate(all_out_features)}
@@ -41,12 +44,26 @@ class UpDownBackbone(nn.Module):
         self.bb_in_feats = bb_in_feats
         scales = list(range(self.n_scales))
         self.bb_scales = scales + scales[-2::-1]
-        self.num_classes = num_classes
 
-        tot_out_dim = backbone_dims[-1]
-        #self.head_norm = nn.LayerNorm(tot_out_dim)
-        #self.head = MLP(tot_out_dim, tot_out_dim, num_classes, num_layers=3)
-        self.head = nn.Linear(tot_out_dim, num_classes)
+        # MAE decoder specifics
+        embed_dim = backbone_dims[-1]
+        patch_size = self.backbones[-1].patch_size
+        num_patches = (img_size // patch_size) ** 2
+        self.decoder_embed = nn.Linear(embed_dim, decoder_embed_dim, bias=True)
+        self.mask_token = nn.Parameter(torch.zeros(1, 1, decoder_embed_dim))
+        self.decoder_pos_embed = nn.Parameter(torch.zeros(1, num_patches, decoder_embed_dim), requires_grad=False)  # fixed sin-cos embedding
+        self.decoder_blocks = nn.ModuleList([
+            Block(decoder_embed_dim, decoder_num_heads, 4, qkv_bias=True, norm_layer=nn.LayerNorm)
+            for i in range(decoder_depth)])
+        self.decoder_norm = nn.LayerNorm(decoder_embed_dim)
+        self.decoder_pred = nn.Linear(decoder_embed_dim, patch_size**2 * 3, bias=True) # decoder to patch
+        decoder_pos_embed = get_2d_sincos_pos_embed(self.decoder_pos_embed.shape[-1],
+                                                    int(num_patches ** .5), cls_token=True)
+        self.decoder_pos_embed.data.copy_(torch.from_numpy(decoder_pos_embed).float().unsqueeze(0))
+        torch.nn.init.normal_(self.mask_token, std=.02)
+        # --------------------------------------------------------------------------
+
+        self.norm_pix_loss = norm_pix_loss
 
         self.apply(self._init_weights)
 
@@ -61,7 +78,7 @@ class UpDownBackbone(nn.Module):
             nn.init.constant_(m.bias, 0)
             nn.init.constant_(m.weight, 1.0)
 
-    def forward_encoder(self, im):
+    def forward_encoder(self, im, mask_ratio=0.75):
         B, C, H, W = im.shape
         up = True
         upsampling_mask = None
@@ -70,12 +87,15 @@ class UpDownBackbone(nn.Module):
         outs = {}
         for j in range(len(self.backbones)):
             scale = self.bb_scales[j]
-            output = self.backbones[j](im, scale, features, features_pos, upsampling_mask)
-            bb_out_features = self.backbones[j]._out_features
+            output = self.backbones[j](im, scale, features, features_pos, upsampling_mask, mask_ratio)
+            if j == 0:
+                mask = output['mask']
+                ids_restore = output['ids_restore']
             all_feat = []
             all_scale = []
             all_pos = []
             all_ss = []
+            bb_out_features = self.backbones[j]._out_features
             for i, f in enumerate(bb_out_features):
                 feat = output[f]
                 feat_pos = output[f + '_pos']
@@ -121,21 +141,17 @@ class UpDownBackbone(nn.Module):
                 features = torch.cat(all_feat, dim=1)
                 #print("For bb level {}, feature shape is {}".format(j, features.shape))
 
-        outs['min_spatial_shape'] = output['min_spatial_shape']
-
-        grid_pos = get_2dpos_of_curr_ps_in_min_ps(H, W, self.backbones[-1].patch_size, self.backbones[-1].min_patch_size, B)
-        mask, ids_restore = self.get_mask_and_ids_restore(grid_pos, output[self.all_out_features[-1] + '_pos'])
-        return output[self.all_out_features[-1]], mask, ids_restore
+        x = output[self.all_out_features[-1]]
+        return x, mask, ids_restore
 
     def forward_decoder(self, x, ids_restore):
         # embed tokens
         x = self.decoder_embed(x)
 
         # append mask tokens to sequence
-        mask_tokens = self.mask_token.repeat(x.shape[0], ids_restore.shape[1] + 1 - x.shape[1], 1)
-        x_ = torch.cat([x[:, 1:, :], mask_tokens], dim=1)  # no cls token
-        x_ = torch.gather(x_, dim=1, index=ids_restore.unsqueeze(-1).repeat(1, 1, x.shape[2]))  # unshuffle
-        x = torch.cat([x[:, :1, :], x_], dim=1)  # append cls token
+        mask_tokens = self.mask_token.repeat(x.shape[0], ids_restore.shape[1] - x.shape[1], 1)
+        x = torch.cat([x, mask_tokens], dim=1)  # no cls token
+        x = torch.gather(x, dim=1, index=ids_restore.unsqueeze(-1).repeat(1, 1, x.shape[2]))  # unshuffle
 
         # add pos embed
         x = x + self.decoder_pos_embed
@@ -148,9 +164,6 @@ class UpDownBackbone(nn.Module):
         # predictor projection
         x = self.decoder_pred(x)
 
-        # remove cls token
-        x = x[:, 1:, :]
-
         return x
 
 
@@ -160,7 +173,8 @@ class UpDownBackbone(nn.Module):
         pred: [N, L, p*p*3]
         mask: [N, L], 0 is keep, 1 is remove,
         """
-        target = self.patchify(imgs)
+        patch_size = self.backbones[-1].patch_size
+        target = self.patchify(imgs, patch_size)
         if self.norm_pix_loss:
             mean = target.mean(dim=-1, keepdim=True)
             var = target.var(dim=-1, keepdim=True)
@@ -173,7 +187,7 @@ class UpDownBackbone(nn.Module):
         return loss
 
     def forward(self, imgs, mask_ratio=0.75):
-        latent, mask, ids_restore = self.forward_encoder(imgs)
+        latent, mask, ids_restore = self.forward_encoder(imgs, mask_ratio)
         pred = self.forward_decoder(latent, ids_restore)  # [N, L, p*p*3]
         loss = self.forward_loss(imgs, pred, mask)
         return loss, pred, mask
@@ -209,6 +223,32 @@ class UpDownBackbone(nn.Module):
 
         return mask, ids_restore
 
+    def patchify(self, imgs, patch_size):
+        """
+        imgs: (N, 3, H, W)
+        x: (N, L, patch_size**2 *3)
+        """
+        assert imgs.shape[2] == imgs.shape[3] and imgs.shape[2] % patch_size == 0
+
+        h = w = imgs.shape[2] // patch_size
+        x = imgs.reshape(shape=(imgs.shape[0], 3, h, patch_size, w, patch_size))
+        x = torch.einsum('nchpwq->nhwpqc', x)
+        x = x.reshape(shape=(imgs.shape[0], h * w, patch_size ** 2 * 3))
+        return x
+
+    def unpatchify(self, x, patch_size):
+        """
+        x: (N, L, patch_size**2 *3)
+        imgs: (N, 3, H, W)
+        """
+        h = w = int(x.shape[1] ** .5)
+        assert h * w == x.shape[1]
+
+        x = x.reshape(shape=(x.shape[0], h, w, patch_size, patch_size, 3))
+        x = torch.einsum('nhwpqc->nchpwq', x)
+        imgs = x.reshape(shape=(x.shape[0], 3, h * patch_size, h * patch_size))
+        return imgs
+
 
 def get_2dpos_of_curr_ps_in_min_ps(height, width, patch_size, min_patch_size, batch_size):
     patches_coords = torch.meshgrid(torch.arange(0, width // min_patch_size, patch_size // min_patch_size), torch.arange(0, height // min_patch_size, patch_size // min_patch_size), indexing='ij')
@@ -219,3 +259,104 @@ def get_2dpos_of_curr_ps_in_min_ps(height, width, patch_size, min_patch_size, ba
     patches_coords = patches_coords.repeat(batch_size, 1, 1)
 
     return patches_coords
+
+def mae_mixres_small_patch32_dec512d8b(**kwargs):
+    bb_in_feats = [[None], ["res5"], ["res5", "res4"], ["res5", "res4", "res3"], ["res5", "res4", "res3"],
+                   ["res5", "res4"], ["res5"], [None]]
+    all_backbones = []
+    bb_names = ['MixResViT', 'MixResNeighbour', 'MixResNeighbour', 'MixResNeighbour', 'MixResNeighbour', 'MixResNeighbour', 'MixResViT']
+    n_scales = 4
+    n_layers = len(bb_names)
+    c_embed_dims = [512, 256, 128, 64, 128, 256, 512]
+    c_depths = [1,1,1,1,1,1,1]
+    c_num_heads = [ 16, 8, 4, 2, 4, 8, 16]
+    c_patch_sizes = [32, 16, 8, 4, 8, 16, 32]
+    c_drop_rates = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+    c_attn_drop_rates = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+    c_upscale_ratios = [0.0, 0.85, 0.65, 0.5, 0.0, 0.0, 0.0]
+    c_split_ratios = [4, 4, 4, 4, 4, 4, 4]
+    c_mlp_ratios = [3., 3., 3., 3., 3., 3., 3.]
+    c_cluster_sizes = [8, 8, 8, 8, 8, 8, 8]
+    c_nbhd_sizes = [48,48,48,48,48,48,48]
+    c_out_features = ["res2", "res3", "res4", "res5"]
+    c_keep_old_scale = True
+    c_add_image_data_to_all = False
+    c_drop_path_rate = 0.1
+    c_layer_scale = 0.0
+    c_register_tokens = 0
+    min_patch_size = c_patch_sizes[-1]
+    for layer_index, name in enumerate(bb_names):
+        if layer_index == 0:
+            first_layer = True
+            in_chans = 3
+        else:
+            first_layer = False
+            in_chans = c_embed_dims[layer_index - 1]
+        if layer_index >= n_scales:
+            scale = n_layers - layer_index - 1
+            patch_sizes = c_patch_sizes[layer_index:]
+            out_features = c_out_features[-(n_layers - layer_index):]
+            in_chans = sum(c_embed_dims[-(layer_index + 1):-(n_layers - layer_index)])
+        else:
+            scale = layer_index
+            patch_sizes = c_patch_sizes[:layer_index + 1]
+            out_features = c_out_features[-(layer_index + 1):]
+        drop_path_rate = c_drop_path_rate
+        dpr = [x.item() for x in torch.linspace(0, drop_path_rate, sum(c_depths))]
+        drop_path = dpr[sum(c_depths[:layer_index]):sum(c_depths[:layer_index + 1])]
+        if name == 'MixResViT':
+            bb = MixResViT(patch_sizes=patch_sizes,
+                           n_layers=c_depths[layer_index],
+                           d_model=c_embed_dims[layer_index],
+                           n_heads=c_num_heads[layer_index],
+                           mlp_ratio=c_mlp_ratios[layer_index],
+                           dropout=c_drop_rates[layer_index],
+                           drop_path_rate=drop_path,
+                           split_ratio=c_split_ratios[layer_index],
+                           channels=in_chans,
+                           n_scales=n_scales,
+                           min_patch_size=min_patch_size,
+                           upscale_ratio=c_upscale_ratios[layer_index],
+                           out_features=out_features,
+                           first_layer=first_layer,
+                           layer_scale=c_layer_scale,
+                           num_register_tokens=c_register_tokens)
+        elif name == 'MixResNeighbour':
+            bb = MixResNeighbour(patch_sizes=patch_sizes,
+                                 n_layers=c_depths[layer_index],
+                                 d_model=c_embed_dims[layer_index],
+                                 n_heads=c_num_heads[layer_index],
+                                 mlp_ratio=c_mlp_ratios[layer_index],
+                                 dropout=c_drop_rates[layer_index],
+                                 drop_path_rate=drop_path,
+                                 attn_drop_rate=c_attn_drop_rates[layer_index],
+                                 split_ratio=c_split_ratios[layer_index],
+                                 channels=in_chans,
+                                 cluster_size=c_cluster_sizes[layer_index],
+                                 nbhd_size=c_nbhd_sizes[layer_index],
+                                 n_scales=n_scales,
+                                 keep_old_scale=c_keep_old_scale,
+                                 scale=scale,
+                                 add_image_data_to_all=c_add_image_data_to_all,
+                                 min_patch_size=min_patch_size,
+                                 upscale_ratio=c_upscale_ratios[layer_index],
+                                 layer_scale=c_layer_scale,
+                                 out_features=out_features,
+                                 first_layer=first_layer)
+        else:
+            raise NotImplementedError(f"Unkown model: {name}")
+        all_backbones.append(bb)
+    model = UpDownBackbone(backbones=all_backbones,
+                           backbone_dims=c_embed_dims,
+                           all_out_features=c_out_features,
+                           n_scales=n_scales,
+                           img_size=224,
+                           bb_in_feats=bb_in_feats, 
+                           decoder_embed_dim=512, 
+                           decoder_depth=8, 
+                           decoder_num_heads=16)
+    return model
+
+
+# set recommended archs
+mae_mixres_small_patch32 = mae_mixres_small_patch32_dec512d8b  # decoder: 512 dim, 8 blocks

@@ -15,6 +15,7 @@ import numpy as np
 import os
 import time
 from pathlib import Path
+import wandb
 
 import torch
 import torch.backends.cudnn as cudnn
@@ -24,13 +25,13 @@ import torchvision.datasets as datasets
 
 import timm
 
-assert timm.__version__ == "0.3.2"  # version check
 import timm.optim.optim_factory as optim_factory
 
 import util.misc as misc
 from util.misc import NativeScalerWithGradNormCount as NativeScaler
 
 import models_mae
+import models_mixres_mae
 
 from engine_pretrain import train_one_epoch
 
@@ -93,6 +94,9 @@ def get_args_parser():
     parser.add_argument('--no_pin_mem', action='store_false', dest='pin_mem')
     parser.set_defaults(pin_mem=True)
 
+    parser.add_argument('--no_wandb_logging', action='store_false', dest='wandb_logging')
+    parser.set_defaults(wandb_logging=True)
+
     # distributed training parameters
     parser.add_argument('--world_size', default=1, type=int,
                         help='number of distributed processes')
@@ -137,6 +141,11 @@ def main(args):
         print("Sampler_train = %s" % str(sampler_train))
     else:
         sampler_train = torch.utils.data.RandomSampler(dataset_train)
+
+    if global_rank == 0 and args.wandb_logging:
+        wandb.login()
+        wandb.init(sync_tensorboard=True,  project="CandidateNet", entity="eiphodos",
+                                  settings=wandb.Settings(start_method="thread", console="off"))
 
     if global_rank == 0 and args.log_dir is not None:
         os.makedirs(args.log_dir, exist_ok=True)
