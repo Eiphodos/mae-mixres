@@ -33,7 +33,7 @@ def train_one_epoch(model: torch.nn.Module,
 
     optimizer.zero_grad()
 
-    if log_writer is not None:
+    if misc.is_main_process() and log_writer is not None:
         print('log_dir: {}'.format(log_writer.log_dir))
 
     for data_iter_step, (samples, _) in enumerate(metric_logger.log_every(data_loader, print_freq, header)):
@@ -67,7 +67,7 @@ def train_one_epoch(model: torch.nn.Module,
         metric_logger.update(lr=lr)
 
         loss_value_reduce = misc.all_reduce_mean(loss_value)
-        if log_writer is not None and (data_iter_step + 1) % accum_iter == 0:
+        if misc.is_main_process() and log_writer is not None and (data_iter_step + 1) % accum_iter == 0:
             """ We use epoch_1000x as the x-axis in tensorboard.
             This calibrates different curves when batch size changes.
             """
@@ -78,5 +78,6 @@ def train_one_epoch(model: torch.nn.Module,
 
     # gather the stats from all processes
     metric_logger.synchronize_between_processes()
-    print("Averaged stats:", metric_logger)
+    if misc.is_main_process():
+        print("Averaged stats:", metric_logger)
     return {k: meter.global_avg for k, meter in metric_logger.meters.items()}
