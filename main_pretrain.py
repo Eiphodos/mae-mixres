@@ -162,7 +162,10 @@ def main(args):
     )
     
     # define the model
-    model = models_mae.__dict__[args.model](norm_pix_loss=args.norm_pix_loss)
+    if 'mixres' in args.model:
+        model = models_mixres_mae.__dict__[args.model](norm_pix_loss=args.norm_pix_loss)
+    else:
+        model = models_mae.__dict__[args.model](norm_pix_loss=args.norm_pix_loss)
 
     model.to(device)
 
