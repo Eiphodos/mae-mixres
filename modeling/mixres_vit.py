@@ -118,7 +118,7 @@ class DWConv(nn.Module):
 
 
 class FeedForward(nn.Module):
-    def __init__(self, dim, hidden_dim, dropout, dw_conv=True, out_dim=None):
+    def __init__(self, dim, hidden_dim, dropout, dw_conv=False, out_dim=None):
         super().__init__()
         self.fc1 = nn.Linear(dim, hidden_dim)
         self.act = nn.GELU()
@@ -400,7 +400,7 @@ class MixResViT(nn.Module):
             x = x + pos_embed
             if torch.isnan(x).any():
                 print("NaNs detected in pos-embedded features in ViT in scale {}".format(scale))
-            x, mask, ids_restore = self.random_masking(x, mask_ratio)
+            x, pos, mask, ids_restore = self.random_masking(x, pos, mask_ratio)
             outs['mask'] = mask
             outs['ids_restore'] = ids_restore
         else:
@@ -423,7 +423,7 @@ class MixResViT(nn.Module):
         outs["min_spatial_shape"] = min_patched_im_size
         return outs
 
-    def random_masking(self, x, mask_ratio):
+    def random_masking(self, x, pos, mask_ratio):
         """
         Perform per-sample random masking by per-sample shuffling.
         Per-sample shuffling is done by argsort random noise.
@@ -441,6 +441,7 @@ class MixResViT(nn.Module):
         # keep the first subset
         ids_keep = ids_shuffle[:, :len_keep]
         x_masked = torch.gather(x, dim=1, index=ids_keep.unsqueeze(-1).repeat(1, 1, D))
+        pos_masked = torch.gather(pos, dim=1, index=ids_keep.unsqueeze(-1).repeat(1, 1, 3))
 
         # generate the binary mask: 0 is keep, 1 is remove
         mask = torch.ones([N, L], device=x.device)
@@ -448,4 +449,4 @@ class MixResViT(nn.Module):
         # unshuffle to get the binary mask
         mask = torch.gather(mask, dim=1, index=ids_restore)
 
-        return x_masked, mask, ids_restore
+        return x_masked, pos_masked, mask, ids_restore
