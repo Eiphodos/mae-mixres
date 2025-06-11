@@ -372,7 +372,7 @@ class MixResViT(nn.Module):
         self.norm_out = nn.LayerNorm(d_model)
         self.apply(init_weights)
 
-        print("Successfully built MixResViT model!")
+        #print("Successfully built MixResViT model!")
 
     @torch.jit.ignore
     def no_weight_decay(self):

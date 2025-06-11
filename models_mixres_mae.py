@@ -67,7 +67,7 @@ class UpDownBackbone(nn.Module):
 
         self.apply(self._init_weights)
 
-        print("Successfully built UpDownBackbone model!")
+        #print("Successfully built UpDownBackbone model!")
 
     def _init_weights(self, m):
         if isinstance(m, nn.Linear):

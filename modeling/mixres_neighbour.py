@@ -666,7 +666,7 @@ class MixResNeighbour(nn.Module):
         self.norm_out = nn.LayerNorm(d_model)
         self.apply(init_weights)
 
-        print("Successfully built MixResNeighbour model!")
+        #print("Successfully built MixResNeighbour model!")
 
     @torch.jit.ignore
     def no_weight_decay(self):
